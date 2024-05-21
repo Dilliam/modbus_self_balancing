@@ -4,8 +4,7 @@
 #include <ArduinoRS485.h> // ArduinoModbus depends on the ArduinoRS485 library
 #include <ArduinoModbus.h>
 
-// Enter a MAC address for your controller below.
-// Newer Ethernet shields have a MAC address printed on a sticker on the shield
+// The arduino OPTA doesnt need to configure the MAC address
 // The IP address will be dependent on your local network:
 IPAddress ip(192, 168, 1, 177);
 
@@ -21,7 +20,9 @@ unsigned long startTime;
 unsigned long endTime;
 char strBuf[50];
 int status = 0;
-
+long yaw;
+long pitch;
+long roll;
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
@@ -61,24 +62,30 @@ void main_loop()
   }
   delay(1000);
   while( modbusTCPClient.connected() ) {
-
-    if (!writeCoil(0x01)){
-      break;
-    }
-
-    delay(1000);
-    
-    if (!writeCoil(0x00)){
-      break;
-    }
-
-    delay(1000);
+    writeCoil(0,0);
+    writeCoil(1,1);
+    modbusTCPClient.holdingRegisterWrite(0,100);
+    //yaw = modbusTCPClient.inputRegisterRead(0);
+    //if (yaw >= 32768) {
+    //  yaw = yaw - 65536;
+    //}
+    //pitch = modbusTCPClient.inputRegisterRead(1);
+    //if (pitch >= 32768) {
+    //  pitch = pitch - 65536;
+    //}
+    //roll = modbusTCPClient.inputRegisterRead(2);
+    //if (roll >= 32768) {
+    //  roll = roll - 65536;
+    //}
+    //Serial.println(yaw);
+    //Serial.println(pitch);
+    //Serial.println(roll);
   }
 }
 
-bool writeCoil(byte value)
+bool writeCoil(int address,byte value)
 {
-  bool status = modbusTCPClient.coilWrite(0x00, value);
+  bool status = modbusTCPClient.coilWrite(address, value);
   if (!status) {
     Serial.println("Failed to write coil");
     modbusTCPClient.stop();

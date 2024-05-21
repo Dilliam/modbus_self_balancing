@@ -14,9 +14,51 @@
 
 #include <SPI.h>
 #include <Ethernet.h>
+#include <floatToString.h>
+
+#include "I2Cdev.h"
+#include "Wire.h"
+#include "MPU6050_6Axis_MotionApps20.h"
 
 #include <ArduinoRS485.h> // ArduinoModbus depends on the ArduinoRS485 library
 #include <ArduinoModbus.h>
+
+MPU6050 mpu;
+
+#define INTERRUPT_PIN 2  // use pin 2 on Arduino Uno & most boards
+#define LED_PIN 13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
+bool blinkState = false;
+
+// MPU control/status vars
+bool dmpReady = false;  // set true if DMP init was successful
+uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
+uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
+uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
+uint16_t fifoCount;     // count of all bytes currently in FIFO
+uint8_t fifoBuffer[64]; // FIFO storage buffer
+
+// orientation/motion vars
+Quaternion q;           // [w, x, y, z]         quaternion container
+VectorInt16 aa;         // [x, y, z]            accel sensor measurements
+VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
+VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
+VectorFloat gravity;    // [x, y, z]            gravity vector
+float euler[3];         // [psi, theta, phi]    Euler angle container
+float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
+
+// packet structure for InvenSense teapot demo
+uint8_t teapotPacket[14] = { '$', 0x02, 0,0, 0,0, 0,0, 0,0, 0x00, 0x00, '\r', '\n' };
+
+
+
+// ================================================================
+// ===               INTERRUPT DETECTION ROUTINE                ===
+// ================================================================
+
+volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+void dmpDataReady() {
+    mpuInterrupt = true;
+}
 
 int enA = 10;
 int in1 = 9;
@@ -40,9 +82,81 @@ ModbusTCPServer modbusTCPServer;
 
 const int ledPin = 8;
 
+char yaw[6];
+char pitch[6];
+char roll[6];
+float yaw_value;
+float pitch_value;
+float roll_value;
+
+bool motor1_1 = 0;
+bool motor1_2 = 0;
+bool motor2_1 = 0;
+bool motor2_2 = 0;
+
+void mpuSetup() {
+        
+  Wire.begin();
+  Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
+
+  Serial.println(F("Initializing I2C devices..."));
+  mpu.initialize();
+  pinMode(INTERRUPT_PIN, INPUT);
+  
+  Serial.println(F("Testing device connections..."));
+  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+  devStatus = mpu.dmpInitialize();
+
+
+  mpu.setXGyroOffset(220);
+  mpu.setYGyroOffset(76);
+  mpu.setZGyroOffset(-85);
+  mpu.setZAccelOffset(1788);
+
+
+  if (devStatus == 0) {
+    // Calibration Time: generate offsets and calibrate our MPU6050
+    mpu.CalibrateAccel(6);
+    mpu.CalibrateGyro(6);
+    mpu.PrintActiveOffsets();
+    // turn on the DMP, now that it's ready
+    Serial.println(F("Enabling DMP..."));
+    mpu.setDMPEnabled(true);
+    // enable Arduino interrupt detection
+    Serial.print(F("Enabling interrupt detection (Arduino external interrupt "));
+    Serial.print(digitalPinToInterrupt(INTERRUPT_PIN));
+    Serial.println(F(")..."));
+    attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), dmpDataReady, RISING);
+    mpuIntStatus = mpu.getIntStatus();
+
+    dmpReady = true;
+    packetSize = mpu.dmpGetFIFOPacketSize();
+  } else {
+    Serial.print(F("DMP Initialization failed (code "));
+    Serial.print(devStatus);
+    Serial.println(F(")"));
+    }
+}
+
+void ethernetSetup() {
+  Ethernet.init(10);
+  Ethernet.begin(mac, ip);
+
+  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+    Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
+    while (true) {
+      delay(1); // do nothing, no point running without Ethernet hardware
+    }
+  }
+  if (Ethernet.linkStatus() == LinkOFF) {
+    Serial.println("Ethernet cable is not connected.");
+  }
+  ethServer.begin();
+}
+
 void setup() {
-  // You can use Ethernet.init(pin) to configure the CS pin
-  Ethernet.init(10);  // Most Arduino shields
+
+   // Most Arduino shields
   //Ethernet.init(5);   // MKR ETH shield
   //Ethernet.init(0);   // Teensy 2.0
   //Ethernet.init(20);  // Teensy++ 2.0
@@ -61,24 +175,9 @@ void setup() {
   while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB port only
   }
-  Serial.println("Ethernet Modbus TCP Example");
 
-  // start the Ethernet connection and the server:
-  Ethernet.begin(mac, ip);
 
-  // Check for Ethernet hardware present
-  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
-    Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
-    while (true) {
-      delay(1); // do nothing, no point running without Ethernet hardware
-    }
-  }
-  if (Ethernet.linkStatus() == LinkOFF) {
-    Serial.println("Ethernet cable is not connected.");
-  }
-
-  // start the server
-  ethServer.begin();
+  ethernetSetup();
   
   // start the Modbus TCP server
   if (!modbusTCPServer.begin()) {
@@ -91,63 +190,77 @@ void setup() {
   digitalWrite(ledPin, LOW);
 
   // configure a single coil at address 0x00
-  modbusTCPServer.configureCoils(0x00, 1);
+  modbusTCPServer.configureCoils(0x00, 4);
+  modbusTCPServer.configureInputRegisters(0,3);
+  modbusTCPServer.configureHoldingRegisters(0, 2);
+
+
+  mpuSetup();
 }
 
-void demoTwo()
+void readMPU() {
+  if (!dmpReady) return;
+
+  if (mpu.dmpGetCurrentFIFOPacket(fifoBuffer)) {
+    mpu.dmpGetQuaternion(&q, fifoBuffer);
+    mpu.dmpGetGravity(&gravity, &q);
+    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+    
+    yaw_value = ypr[0]* 180/M_PI;
+    pitch_value = ypr[1]* 180/M_PI;
+    roll_value = ypr[2]* 180/M_PI;
+    floatToString(yaw_value, yaw, sizeof(yaw), 0);
+    floatToString(pitch_value, pitch, sizeof(pitch), 0);
+    floatToString(roll_value, roll, sizeof(roll), 0);
+    String yaw_data(yaw);
+    String pitch_data(pitch);
+    String roll_data(roll);
+    modbusTCPServer.inputRegisterWrite(0, yaw_data.toInt());
+    modbusTCPServer.inputRegisterWrite(1, pitch_data.toInt());
+    modbusTCPServer.inputRegisterWrite(2, roll_data.toInt());
+    Serial.print("ypr\t");
+    Serial.print("\t");
+    Serial.print(yaw_value);
+    Serial.print("\t");
+    Serial.print(pitch_value);
+    Serial.print("\t");
+    Serial.println(roll_value);
+  }
+}
+
+void controlMotor()
 {
   // this function will run the motors across the range of possible speeds
   // note that maximum speed is determined by the motor itself and the operating voltage
   // the PWM values sent by analogWrite() are fractions of the maximum speed possible 
   // by your hardware
   // turn on motors
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, HIGH);  
-  digitalWrite(in3, LOW);
-  digitalWrite(in4, HIGH); 
+  digitalWrite(in1, modbusTCPServer.coilRead(0x00));
+  digitalWrite(in2, modbusTCPServer.coilRead(0x01));  
+  digitalWrite(in3, modbusTCPServer.coilRead(0x02));
+  digitalWrite(in4, modbusTCPServer.coilRead(0x03)); 
   // accelerate from zero to maximum speed
-  for (int i = 0; i < 256; i++)
-  {
-    analogWrite(enA, i);
-    analogWrite(enB, i);
-    delay(20);
-  } 
-  // decelerate from maximum speed to zero
-  for (int i = 255; i >= 0; --i)
-  {
-    analogWrite(enA, i);
-    analogWrite(enB, i);
-    delay(20);
-  } 
-  // now turn off motors
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, LOW);  
-  digitalWrite(in3, LOW);
-  digitalWrite(in4, LOW);  
+  analogWrite(enA, modbusTCPServer.holdingRegisterRead(0));
+  analogWrite(enB, modbusTCPServer.holdingRegisterRead(1));
+  delay(20);
+
 }
 
 void loop() {
-  // listen for incoming clients
-  demoTwo();
-  //EthernetClient client = ethServer.available();
-  //
-  //if (client) {
-  //  // a new client connected
-  //  Serial.println("new client");
-//
-  //  // let the Modbus TCP accept the connection 
-  //  modbusTCPServer.accept(client);
-//
-  //  while (client.connected()) {
-  //    // poll for Modbus TCP requests, while client connected
-  //    modbusTCPServer.poll();
-//
-  //    // update the LED
-  //    updateLED();
-  //  }
-//
-  //  Serial.println("client disconnected");
-  //}
+  //demoTwo();
+  EthernetClient client = ethServer.available();
+
+  if (client) {
+    modbusTCPServer.accept(client);
+    while(client.connected()){
+      modbusTCPServer.poll();
+      //readMPU();
+      controlMotor();
+    }
+  }
+  
+  //readMPU();
+ 
 }
 
 void updateLED() {
