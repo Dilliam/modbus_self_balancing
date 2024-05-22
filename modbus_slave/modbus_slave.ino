@@ -60,7 +60,7 @@ void dmpDataReady() {
     mpuInterrupt = true;
 }
 
-int enA = 10;
+int enA = 11;
 int in1 = 9;
 int in2 = 8;
 // motor two
@@ -93,6 +93,8 @@ bool motor1_1 = 0;
 bool motor1_2 = 0;
 bool motor2_1 = 0;
 bool motor2_2 = 0;
+
+int speed = 0;
 
 void mpuSetup() {
         
@@ -235,14 +237,16 @@ void controlMotor()
   // the PWM values sent by analogWrite() are fractions of the maximum speed possible 
   // by your hardware
   // turn on motors
-  digitalWrite(in1, modbusTCPServer.coilRead(0x00));
-  digitalWrite(in2, modbusTCPServer.coilRead(0x01));  
-  digitalWrite(in3, modbusTCPServer.coilRead(0x02));
-  digitalWrite(in4, modbusTCPServer.coilRead(0x03)); 
+  
   // accelerate from zero to maximum speed
-  analogWrite(enA, modbusTCPServer.holdingRegisterRead(0));
-  analogWrite(enB, modbusTCPServer.holdingRegisterRead(1));
-  delay(20);
+  while(true) {
+    modbusTCPServer.poll();
+    speed = modbusTCPServer.holdingRegisterRead(0);
+    Serial.println(speed);
+    analogWrite(enA, speed);
+    delay(200);
+  }
+  
 
 }
 
@@ -254,8 +258,13 @@ void loop() {
     modbusTCPServer.accept(client);
     while(client.connected()){
       modbusTCPServer.poll();
-      //readMPU();
-      controlMotor();
+      readMPU();
+      digitalWrite(in1, modbusTCPServer.coilRead(0x00));
+      digitalWrite(in2, modbusTCPServer.coilRead(0x01));
+      //digitalWrite(in3, modbusTCPServer.coilRead(0x02));
+      //digitalWrite(in4, modbusTCPServer.coilRead(0x03));
+      speed = int(modbusTCPServer.holdingRegisterRead(0));
+      analogWrite(enA, speed);
     }
   }
   

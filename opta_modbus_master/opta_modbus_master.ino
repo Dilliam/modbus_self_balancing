@@ -23,11 +23,12 @@ int status = 0;
 long yaw;
 long pitch;
 long roll;
+String error_msg = String("Connection timed out");
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
   while(!Serial) {
-    ;
+    Serial.println("waiting for serial to start");
   }
 
   Ethernet.begin(ip);
@@ -35,6 +36,7 @@ void setup() {
   if (Ethernet.hardwareStatus() == EthernetNoHardware) {
     Serial.println("Ethernet shield was not found.  Sorry, can't run without hardware. :(");
     while (true) {
+      Serial.println("Ethernet failed");
       delay(1); // do nothing, no point running without Ethernet hardware
     }
   }
@@ -45,8 +47,40 @@ void setup() {
 }
 
 void loop() {
+  if (Ethernet.linkStatus() == LinkOFF) {
+    Serial.println("Ethernet cable is not connected.");
+  }
   main_loop();
 
+}
+
+void readMPU() {
+  yaw = modbusTCPClient.inputRegisterRead(0);
+  if (yaw >= 32768) {
+    yaw = yaw - 65536;
+  }
+  pitch = modbusTCPClient.inputRegisterRead(1);
+  if (pitch >= 32768) {
+    pitch = pitch - 65536;
+  }
+  roll = modbusTCPClient.inputRegisterRead(2);
+  if (roll >= 32768) {
+    roll = roll - 65536;
+  }
+  Serial.println(yaw);
+  Serial.println(pitch);
+  Serial.println(roll);
+  if (roll > 0) {
+    writeCoil(0,0);
+    writeCoil(1,1);
+    modbusTCPClient.holdingRegisterWrite(0,(3*roll*(255/180)));
+  } else {
+    writeCoil(0,1);
+    writeCoil(1,0);
+    modbusTCPClient.holdingRegisterWrite(0,abs(3*roll*(255/180)));
+  }
+  delay(1);
+  
 }
 
 void main_loop()
@@ -61,25 +95,16 @@ void main_loop()
     }
   }
   delay(1000);
+  writeCoil(0,0);
+  writeCoil(1,1);
   while( modbusTCPClient.connected() ) {
-    writeCoil(0,0);
-    writeCoil(1,1);
-    modbusTCPClient.holdingRegisterWrite(0,100);
-    //yaw = modbusTCPClient.inputRegisterRead(0);
-    //if (yaw >= 32768) {
-    //  yaw = yaw - 65536;
-    //}
-    //pitch = modbusTCPClient.inputRegisterRead(1);
-    //if (pitch >= 32768) {
-    //  pitch = pitch - 65536;
-    //}
-    //roll = modbusTCPClient.inputRegisterRead(2);
-    //if (roll >= 32768) {
-    //  roll = roll - 65536;
-    //}
-    //Serial.println(yaw);
-    //Serial.println(pitch);
-    //Serial.println(roll);
+    Serial.println("Writing to motor"); 
+
+    readMPU();
+    
+    if (error_msg == (modbusTCPClient.lastError()) ) {
+      modbusTCPClient.stop();
+    }
   }
 }
 
