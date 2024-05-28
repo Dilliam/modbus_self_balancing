@@ -158,13 +158,6 @@ void ethernetSetup() {
 
 void setup() {
 
-   // Most Arduino shields
-  //Ethernet.init(5);   // MKR ETH shield
-  //Ethernet.init(0);   // Teensy 2.0
-  //Ethernet.init(20);  // Teensy++ 2.0
-  //Ethernet.init(15);  // ESP8266 with Adafruit Featherwing Ethernet
-  //Ethernet.init(33);  // ESP32 with Adafruit Featherwing Ethernet
-
   // Open serial communications and wait for port to open:
   pinMode(enA, OUTPUT);
   pinMode(enB, OUTPUT);
@@ -174,9 +167,6 @@ void setup() {
   pinMode(in4, OUTPUT);
 
   Serial.begin(9600);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for native USB port only
-  }
 
 
   ethernetSetup();
@@ -230,28 +220,7 @@ void readMPU() {
   }
 }
 
-void controlMotor()
-{
-  // this function will run the motors across the range of possible speeds
-  // note that maximum speed is determined by the motor itself and the operating voltage
-  // the PWM values sent by analogWrite() are fractions of the maximum speed possible 
-  // by your hardware
-  // turn on motors
-  
-  // accelerate from zero to maximum speed
-  while(true) {
-    modbusTCPServer.poll();
-    speed = modbusTCPServer.holdingRegisterRead(0);
-    Serial.println(speed);
-    analogWrite(enA, speed);
-    delay(200);
-  }
-  
-
-}
-
 void loop() {
-  //demoTwo();
   EthernetClient client = ethServer.available();
 
   if (client) {
@@ -261,10 +230,11 @@ void loop() {
       readMPU();
       digitalWrite(in1, modbusTCPServer.coilRead(0x00));
       digitalWrite(in2, modbusTCPServer.coilRead(0x01));
-      //digitalWrite(in3, modbusTCPServer.coilRead(0x02));
-      //digitalWrite(in4, modbusTCPServer.coilRead(0x03));
-      speed = int(modbusTCPServer.holdingRegisterRead(0));
+      digitalWrite(in3, modbusTCPServer.coilRead(0x02));
+      digitalWrite(in4, modbusTCPServer.coilRead(0x03));
+      speed = int(modbusTCPServer.holdingRegisterRead(1));
       analogWrite(enA, speed);
+      analogWrite(enB, speed);
     }
   }
   

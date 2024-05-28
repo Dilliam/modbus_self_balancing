@@ -20,16 +20,15 @@ unsigned long startTime;
 unsigned long endTime;
 char strBuf[50];
 int status = 0;
+int multiplier = 1;
 long yaw;
 long pitch;
+long pitch_angle;
 long roll;
 String error_msg = String("Connection timed out");
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(9600);
-  while(!Serial) {
-    Serial.println("waiting for serial to start");
-  }
 
   Ethernet.begin(ip);
 
@@ -63,6 +62,7 @@ void readMPU() {
   if (pitch >= 32768) {
     pitch = pitch - 65536;
   }
+  pitch_angle = pitch;
   roll = modbusTCPClient.inputRegisterRead(2);
   if (roll >= 32768) {
     roll = roll - 65536;
@@ -70,15 +70,29 @@ void readMPU() {
   Serial.println(yaw);
   Serial.println(pitch);
   Serial.println(roll);
-  if (roll > 0) {
+  if (pitch > 0) {
     writeCoil(0,0);
     writeCoil(1,1);
-    modbusTCPClient.holdingRegisterWrite(0,(3*roll*(255/180)));
+    writeCoil(2,1);
+    writeCoil(3,0);
+    pitch = pitch*(255/180);
+    
   } else {
     writeCoil(0,1);
     writeCoil(1,0);
-    modbusTCPClient.holdingRegisterWrite(0,abs(3*roll*(255/180)));
+    writeCoil(2,0);
+    writeCoil(3,1);
+    pitch = abs(pitch*(255/180));
   }
+  if(0 <= abs(pitch_angle) < 10){
+    multiplier = 20;
+  }
+  else if (10 <= abs(pitch_angle) <= 16){
+    multiplier = 15;
+  } else {
+    multiplier = 3;
+  }
+  modbusTCPClient.holdingRegisterWrite(1,multiplier*pitch);
   delay(1);
   
 }
